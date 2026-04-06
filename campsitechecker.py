@@ -24,8 +24,8 @@ GMAIL_ADDRESS      = "marleytosh@gmail.com"
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
 FIDO_NUMBER        = "2508847865"   # <-- replace with your 10-digit Fido number
 
-ARRIVAL_DATE   = "07/31/2026"   # MM/DD/YYYY
-DEPARTURE_DATE = "08/03/2026"   # MM/DD/YYYY
+ARRIVAL_DATE   = "08/04/2026"   # MM/DD/YYYY
+DEPARTURE_DATE = "08/07/2026"   # MM/DD/YYYY
 
 # Descanso Bay site constants (extracted from page source)
 CUSTOMER_ID      = "56537"
