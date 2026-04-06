@@ -2,7 +2,7 @@
 Descanso Bay Campsite Availability Checker
 Fetches the map iframe page and parses the hidden MapDataID table.
 IconType 1 = green (available), 2 = yellow (alternate), 3 = red (not available)
-Sends email via Gmail and push notification via ntfy.sh
+Sends email via Gmail and push notification via Pushover.
 """
 
 import os
@@ -19,10 +19,12 @@ from email.mime.multipart import MIMEMultipart
 # ─────────────────────────────────────────────
 GMAIL_ADDRESS      = "marleytosh@gmail.com"
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
-NTFY_TOPIC         = "DescansoBayAlerts2026"
 
-ARRIVAL_DATE   = "08/04/2026"
-DEPARTURE_DATE = "08/07/2026"
+PUSHOVER_USER_KEY  = "usbe385f9seyr4azpodowq8krvhnnm"
+PUSHOVER_API_TOKEN = "ab8p1aszzitboc79x73bu5z1tdgdqt"
+
+ARRIVAL_DATE   = "07/31/2026"
+DEPARTURE_DATE = "08/03/2026"
 
 # Descanso Bay constants (from page source)
 CUSTOMER_ID = "56537"
@@ -171,24 +173,28 @@ def send_email(available_sites):
         log.error("Failed to send email: %s", e)
 
 
-def send_ntfy(available_sites):
+def send_pushover(available_sites):
     site_list = "\n".join(available_sites)
     message   = f"Sites open:\n{site_list}\n\nBook now: {BOOKING_URL}"
     try:
+        data = urllib.parse.urlencode({
+            "token":   PUSHOVER_API_TOKEN,
+            "user":    PUSHOVER_USER_KEY,
+            "title":   "Campsite Available! Descanso Bay Jul 31-Aug 3",
+            "message": message,
+            "priority": "1",
+            "sound":   "siren",
+        }).encode("utf-8")
+
         req = urllib.request.Request(
-            f"https://ntfy.sh/{NTFY_TOPIC}",
-            data=message.encode("utf-8"),
+            "https://api.pushover.net/1/messages.json",
+            data=data,
             method="POST",
-            headers={
-                "Title":    "Campsite Available! Descanso Bay Jul 31-Aug 3",
-                "Priority": "urgent",
-                "Tags":     "camping,tent",
-            },
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
-            log.info("ntfy notification sent: %s", resp.status)
+            log.info("Pushover notification sent: %s", resp.status)
     except Exception as e:
-        log.error("ntfy failed: %s", e)
+        log.error("Pushover failed: %s", e)
 
 
 def main():
@@ -211,7 +217,7 @@ def main():
         for s in available:
             log.info("  -> %s", s)
         send_email(available)
-        send_ntfy(available)
+        send_pushover(available)
     else:
         log.info("No availability this check.")
 
