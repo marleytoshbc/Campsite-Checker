@@ -1,21 +1,17 @@
 """
 Descanso Bay Campsite Availability Checker
-Calls the camping.com WebService API directly to check for Tent site availability.
-Sends email + Fido SMS alert when a site is found.
-
-Jul 31 - Aug 3, 2026 | Tent | Descanso Bay Regional Park
+Fetches the map iframe page and parses the hidden MapDataID table.
+IconType 1 = green (available), 2 = yellow (alternate), 3 = red (not available)
 """
 
 import os
-import time
-import json
-import logging
+import re
 import smtplib
+import logging
 import urllib.request
 import urllib.parse
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from xml.etree import ElementTree
 
 # ─────────────────────────────────────────────
 # CONFIGURATION
@@ -24,20 +20,19 @@ GMAIL_ADDRESS      = "marleytosh@gmail.com"
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
 FIDO_NUMBER        = "2508847865"   # <-- replace with your 10-digit Fido number
 
-ARRIVAL_DATE   = "08/04/2026"   # MM/DD/YYYY
-DEPARTURE_DATE = "08/07/2026"   # MM/DD/YYYY
+ARRIVAL_DATE   = "08/04/2026"
+DEPARTURE_DATE = "08/07/2026"
 
-# Descanso Bay site constants (extracted from page source)
-CUSTOMER_ID      = "56537"
-GUID             = "e21798cd-02b6-4388-9d32-8ac6d75e8aa5"
-AREA_ID          = "300000011"
-MAP_ID           = "300000020"
-SPACE_TYPE_ID    = "21"          # Tent = unit type 5, space type 21
-UNIT_TYPE_ID     = "5"           # Tent
-ORDER_SOURCE     = "10"
-ICON_NAME        = "pen_med"
+# Descanso Bay constants (from page source)
+CUSTOMER_ID = "56537"
+GUID        = "e21798cd-02b6-4388-9d32-8ac6d75e8aa5"
+AREA_ID     = "300000011"
+MAP_ID      = "300000020"
+SPACE_TYPE  = "21"
+UNIT_TYPE   = "5"
+ICON_NAME   = "pen_med"
 
-BASE_URL = "https://properties3.camping.com"
+BASE_URL    = "https://properties3.camping.com"
 BOOKING_URL = "https://properties3.camping.com/descanso-bay-regional-park/reservations"
 # ─────────────────────────────────────────────
 
@@ -48,124 +43,100 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-def build_api_url():
-    """Build the WebService URL that returns availability data."""
-    params = {
-        "ActionType": "1005",
-        "CustomerID": CUSTOMER_ID,
-        "FromDate": ARRIVAL_DATE,
-        "ToDate": DEPARTURE_DATE,
-        "AmpService": "",
-        "UnitType": UNIT_TYPE_ID,
-        "Width": "-1",
-        "Length": "-1",
-        "SideOuts": "-1",
-        "UomID": "1",
-        "SpaceClass": "-1",
-        "Duration": "",
-        "StartTime": "",
-        "SpaceType": SPACE_TYPE_ID,
-        "MapID": MAP_ID,
-        "IconName": ICON_NAME,
-        "Location": "-1",
-        "Avalability": "-1",
-        "Handicap": "-1",
-        "Height": "-1",
-        "Depth": "-1",
-        "Online": "1",
-        "AreaID": AREA_ID,
+def build_map_url():
+    params = urllib.parse.urlencode({
+        "ModuleTypeID": "1009",
+        "CustomerID":   CUSTOMER_ID,
+        "FromDate":     ARRIVAL_DATE,
+        "ToDate":       DEPARTURE_DATE,
+        "AmpService":   "",
+        "UnitType":     UNIT_TYPE,
+        "Width":        "-1",
+        "Length":       "-1",
+        "SideOuts":     "-1",
+        "UomID":        "1",
+        "SpaceClass":   "-1",
+        "Duration":     "",
+        "StartTime":    "",
+        "SpaceType":    SPACE_TYPE,
+        "MapID":        MAP_ID,
+        "IconName":     ICON_NAME,
+        "Location":     "-1",
+        "Avalability":  "-1",
+        "Handicap":     "-1",
+        "Height":       "-1",
+        "Depth":        "-1",
+        "Online":       "1",
+        "AreaID":       AREA_ID,
         "TowVehicleLengthID": "-1",
-        "GUID": GUID,
-        "e": str(time.time()),
-    }
-    query = urllib.parse.urlencode(params)
-    return f"{BASE_URL}/descanso-bay-regional-park/WebService.ashx?{query}"
+    })
+    return (
+        f"{BASE_URL}/descanso-bay-regional-park/guid-{GUID}"
+        f"/reservations/online/map/Customer_Setup_Facility_Map.aspx?{params}"
+    )
 
 
-def check_availability():
-    """
-    Calls the WebService API and checks for available sites.
-    Returns a list of available site descriptions, or empty list if none.
-    """
-    url = build_api_url()
-    log.info("Calling availability API...")
-    log.debug("URL: %s", url)
-
+def fetch_map_page(url):
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json, text/javascript, */*",
-        "Referer": f"{BASE_URL}/descanso-bay-regional-park/reservations/availability",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": (
+            f"{BASE_URL}/descanso-bay-regional-park/guid-{GUID}"
+            f"/reservations/availability"
+        ),
     }
-
     req = urllib.request.Request(url, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=30) as response:
-            raw = response.read().decode("utf-8")
-    except Exception as e:
-        log.error("API request failed: %s", e)
-        return []
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return resp.read().decode("utf-8")
 
-    log.debug("Raw response (first 500 chars): %s", raw[:500])
 
-    # The API returns XML. Parse it.
-    # Available sites have IsSelect="1", unavailable have IsSelect="0"
-    available_sites = []
+def parse_availability(html):
+    """
+    Parse the hidden MapDataID table.
+    Columns: SpaceID | SiteNum | Coords | SpaceType | SpaceClass | SpaceAttr | ThumbPhoto | IconType | ...
+    IconType 1 = available (green), 2 = alternate (yellow), 3 = not available (red)
+    """
+    available = []
 
-    try:
-        # Try JSON first (some responses come back as JSON)
-        data = json.loads(raw)
-        log.info("Response is JSON: %s", str(data)[:200])
-        # If JSON, check for available sites in whatever structure comes back
-        text = json.dumps(data).lower()
-        if "available" in text and "isselect" in text:
-            available_sites.append("Site available (see booking page for details)")
-        return available_sites
+    match = re.search(
+        r'<table[^>]*id=[\'"]MapDataID[\'"][^>]*>(.*?)</table>',
+        html,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if not match:
+        log.warning("MapDataID table not found in response")
+        return available
 
-    except (json.JSONDecodeError, ValueError):
-        pass
+    table_html = match.group(1)
+    rows = re.findall(r'<tr>(.*?)</tr>', table_html, re.DOTALL | re.IGNORECASE)
+    log.info("Found %d site rows in map table", len(rows))
 
-    # Try XML parsing
-    try:
-        root = ElementTree.fromstring(raw)
+    for row in rows:
+        cells = re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL | re.IGNORECASE)
+        if len(cells) < 8:
+            continue
 
-        # Look for rowhead rows -- these are the actual campsites
-        # IsSelect="1" means available for your dates
-        # IsSelect="0" means not available
-        rowhead = root.find(".//rowhead")
-        if rowhead is None:
-            log.info("No rowhead element found in XML -- no sites returned")
-            return []
+        site_num   = cells[1].strip()
+        space_type = cells[3].strip()
+        space_cls  = cells[4].strip()
+        icon_type  = cells[7].strip()
 
-        rows = rowhead.findall("row")
-        log.info("Found %d site rows in response", len(rows))
+        log.info("Site %s | %s | %s | IconType=%s", site_num, space_type, space_cls, icon_type)
 
-        for row in rows:
-            is_select = row.get("IsSelect", "0")
-            site_desc = row.text or row.get("id", "Unknown site")
-            site_id   = row.get("id", "?")
+        if icon_type == "1":
+            available.append(f"Site {site_num} -- {space_type} / {space_cls} (Available)")
+        elif icon_type == "2":
+            available.append(f"Site {site_num} -- {space_type} / {space_cls} (Alternate Availability)")
 
-            if is_select == "1":
-                log.info("AVAILABLE site found: ID=%s Desc=%s", site_id, site_desc)
-                available_sites.append(f"Site {site_id}: {site_desc}")
-            else:
-                log.info("Not available: ID=%s", site_id)
-
-        return available_sites
-
-    except ElementTree.ParseError as e:
-        log.warning("XML parse failed: %s", e)
-        log.info("Raw response: %s", raw[:1000])
-
-        # Last resort: look for IsSelect="1" as plain text
-        if 'IsSelect="1"' in raw or "isselect=1" in raw.lower():
-            log.info("Found IsSelect=1 via text search -- availability detected")
-            return ["Site available (see booking page for details)"]
-
-        return []
+    return available
 
 
 def send_alerts(available_sites):
-    """Send email to Gmail and SMS via Fido email-to-text."""
     site_list = "\n".join(available_sites)
     subject   = "Campsite Available! Descanso Bay Jul 31 - Aug 3"
     body_text = (
@@ -177,11 +148,11 @@ def send_alerts(available_sites):
     )
     body_html = (
         f"<h2>Campsite Available at Descanso Bay!</h2>"
-        f"<p><strong>Dates:</strong> July 31 – Aug 3, 2026<br>"
+        f"<p><strong>Dates:</strong> July 31 - Aug 3, 2026<br>"
         f"<strong>Type:</strong> Tent</p>"
         f"<pre>{site_list}</pre>"
         f"<p><a href='{BOOKING_URL}' style='font-size:18px;font-weight:bold;'>"
-        f"👉 Book Now</a></p>"
+        f"Book Now</a></p>"
     )
 
     recipients = [GMAIL_ADDRESS, f"{FIDO_NUMBER}@fido.ca"]
@@ -207,10 +178,19 @@ def main():
     log.info("Campsite Checker -- single run")
     log.info("Dates: %s to %s | Tent | Descanso Bay", ARRIVAL_DATE, DEPARTURE_DATE)
 
-    available = check_availability()
+    url = build_map_url()
+    log.info("Fetching map page...")
+
+    try:
+        html = fetch_map_page(url)
+    except Exception as e:
+        log.error("Failed to fetch map page: %s", e)
+        return
+
+    available = parse_availability(html)
 
     if available:
-        log.info("*** AVAILABILITY FOUND: %s site(s) ***", len(available))
+        log.info("*** AVAILABILITY FOUND: %d site(s) ***", len(available))
         for s in available:
             log.info("  -> %s", s)
         send_alerts(available)
