@@ -16,12 +16,6 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install dependencies
-        run: |
-          pip install playwright
-          playwright install chromium
-          playwright install-deps chromium
-
       - name: Run checker
         env:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
