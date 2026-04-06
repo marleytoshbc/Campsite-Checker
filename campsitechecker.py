@@ -21,8 +21,8 @@ GMAIL_ADDRESS      = "marleytosh@gmail.com"
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
 NTFY_TOPIC         = "DescansoBayAlert2026"
 
-ARRIVAL_DATE   = "07/31/2026"
-DEPARTURE_DATE = "08/03/2026"
+ARRIVAL_DATE   = "08/04/2026"
+DEPARTURE_DATE = "08/07/2026"
 
 # Descanso Bay constants (from page source)
 CUSTOMER_ID = "56537"
