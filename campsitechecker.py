@@ -2,6 +2,7 @@
 Descanso Bay Campsite Availability Checker
 Fetches the map iframe page and parses the hidden MapDataID table.
 IconType 1 = green (available), 2 = yellow (alternate), 3 = red (not available)
+Sends email via Gmail and push notification via ntfy.sh
 """
 
 import os
@@ -18,10 +19,10 @@ from email.mime.multipart import MIMEMultipart
 # ─────────────────────────────────────────────
 GMAIL_ADDRESS      = "marleytosh@gmail.com"
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
-FIDO_NUMBER        = "2508847865"   # <-- replace with your 10-digit Fido number
+NTFY_TOPIC         = "DescansoBayAlert2026"
 
-ARRIVAL_DATE   = "08/04/2026"
-DEPARTURE_DATE = "08/07/2026"
+ARRIVAL_DATE   = "07/31/2026"
+DEPARTURE_DATE = "08/03/2026"
 
 # Descanso Bay constants (from page source)
 CUSTOMER_ID = "56537"
@@ -135,7 +136,7 @@ def parse_availability(html):
     return available
 
 
-def send_alerts(available_sites):
+def send_email(available_sites):
     site_list = "\n".join(available_sites)
     subject   = "Campsite Available! Descanso Bay Jul 31 - Aug 3"
     body_text = (
@@ -154,23 +155,40 @@ def send_alerts(available_sites):
         f"Book Now</a></p>"
     )
 
-    recipients = [GMAIL_ADDRESS, f"{FIDO_NUMBER}@fido.ca"]
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"]    = GMAIL_ADDRESS
+        msg["To"]      = GMAIL_ADDRESS
+        msg.attach(MIMEText(body_text, "plain"))
+        msg.attach(MIMEText(body_html, "html"))
 
-    for recipient in recipients:
-        try:
-            msg = MIMEMultipart("alternative")
-            msg["Subject"] = subject
-            msg["From"]    = GMAIL_ADDRESS
-            msg["To"]      = recipient
-            msg.attach(MIMEText(body_text, "plain"))
-            msg.attach(MIMEText(body_html, "html"))
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+            server.sendmail(GMAIL_ADDRESS, GMAIL_ADDRESS, msg.as_string())
+        log.info("Email alert sent to %s", GMAIL_ADDRESS)
+    except Exception as e:
+        log.error("Failed to send email: %s", e)
 
-            with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-                server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-                server.sendmail(GMAIL_ADDRESS, recipient, msg.as_string())
-            log.info("Alert sent to %s", recipient)
-        except Exception as e:
-            log.error("Failed to send to %s: %s", recipient, e)
+
+def send_ntfy(available_sites):
+    site_list = "\n".join(available_sites)
+    message   = f"Sites open:\n{site_list}\n\nBook now: {BOOKING_URL}"
+    try:
+        req = urllib.request.Request(
+            f"https://ntfy.sh/{NTFY_TOPIC}",
+            data=message.encode("utf-8"),
+            method="POST",
+            headers={
+                "Title":    "Campsite Available! Descanso Bay Jul 31-Aug 3",
+                "Priority": "urgent",
+                "Tags":     "camping,tent",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            log.info("ntfy notification sent: %s", resp.status)
+    except Exception as e:
+        log.error("ntfy failed: %s", e)
 
 
 def main():
@@ -192,7 +210,8 @@ def main():
         log.info("*** AVAILABILITY FOUND: %d site(s) ***", len(available))
         for s in available:
             log.info("  -> %s", s)
-        send_alerts(available)
+        send_email(available)
+        send_ntfy(available)
     else:
         log.info("No availability this check.")
 
