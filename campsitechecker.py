@@ -19,7 +19,7 @@ from email.mime.multipart import MIMEMultipart
 # ─────────────────────────────────────────────
 GMAIL_ADDRESS      = "marleytosh@gmail.com"
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
-NTFY_TOPIC         = "DescansoBayAlert2026"
+NTFY_TOPIC         = "DescansoBayAlerts2026"
 
 ARRIVAL_DATE   = "08/04/2026"
 DEPARTURE_DATE = "08/07/2026"
