@@ -1,26 +1,45 @@
+"""
+Descanso Bay Campsite Availability Checker
+Calls the camping.com WebService API directly to check for Tent site availability.
+Sends email + Fido SMS alert when a site is found.
+
+Jul 31 - Aug 3, 2026 | Tent | Descanso Bay Regional Park
+"""
+
 import os
 import time
-import smtplib
+import json
 import logging
+import smtplib
+import urllib.request
+import urllib.parse
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
+from xml.etree import ElementTree
 
+# ─────────────────────────────────────────────
+# CONFIGURATION
+# ─────────────────────────────────────────────
 GMAIL_ADDRESS      = "marleytosh@gmail.com"
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
-FIDO_NUMBER        = "2508847865" 
+FIDO_NUMBER        = "2508847865"   # <-- replace with your 10-digit Fido number
 
-ARRIVAL_DATE   = "07/31/2026"
-DEPARTURE_DATE = "08/03/2026"
-UNIT_TYPE      = "Tent"
+ARRIVAL_DATE   = "07/31/2026"   # MM/DD/YYYY
+DEPARTURE_DATE = "08/03/2026"   # MM/DD/YYYY
 
-URL = (
-    "https://properties3.camping.com/descanso-bay-regional-park/"
-    "guid-b8173a80-045c-47de-9517-cb038873bc3c/reservations/availability"
-)
-BOOKING_URL = (
-    "https://properties3.camping.com/descanso-bay-regional-park/reservations"
-)
+# Descanso Bay site constants (extracted from page source)
+CUSTOMER_ID      = "56537"
+GUID             = "e21798cd-02b6-4388-9d32-8ac6d75e8aa5"
+AREA_ID          = "300000011"
+MAP_ID           = "300000020"
+SPACE_TYPE_ID    = "21"          # Tent = unit type 5, space type 21
+UNIT_TYPE_ID     = "5"           # Tent
+ORDER_SOURCE     = "10"
+ICON_NAME        = "pen_med"
+
+BASE_URL = "https://properties3.camping.com"
+BOOKING_URL = "https://properties3.camping.com/descanso-bay-regional-park/reservations"
+# ─────────────────────────────────────────────
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,142 +48,172 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-def send_email(subject, body_text, body_html):
-    recipients = [
-        GMAIL_ADDRESS,
-        f"{FIDO_NUMBER}@fido.ca",
-    ]
-    for recipient in recipients:
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"]    = GMAIL_ADDRESS
-        msg["To"]      = recipient
-        msg.attach(MIMEText(body_text, "plain"))
-        msg.attach(MIMEText(body_html, "html"))
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-            server.sendmail(GMAIL_ADDRESS, recipient, msg.as_string())
-        log.info("Alert sent to %s", recipient)
-
-
-def send_alert(sites_found):
-    subject   = "Campsite Available! Descanso Bay Jul 31 - Aug 3"
-    body_text = f"Availability found!\n\nDates: July 31 - Aug 3, 2026\nType: Tent\n\n{sites_found}\n\nBook now: {BOOKING_URL}"
-    body_html = f"<h2>Campsite Available at Descanso Bay!</h2><p><strong>Dates:</strong> July 31 - Aug 3, 2026<br><strong>Type:</strong> Tent</p><pre>{sites_found}</pre><p><a href='{BOOKING_URL}'>Book Now</a></p>"
-    send_email(subject, body_text, body_html)
+def build_api_url():
+    """Build the WebService URL that returns availability data."""
+    params = {
+        "ActionType": "1005",
+        "CustomerID": CUSTOMER_ID,
+        "FromDate": ARRIVAL_DATE,
+        "ToDate": DEPARTURE_DATE,
+        "AmpService": "",
+        "UnitType": UNIT_TYPE_ID,
+        "Width": "-1",
+        "Length": "-1",
+        "SideOuts": "-1",
+        "UomID": "1",
+        "SpaceClass": "-1",
+        "Duration": "",
+        "StartTime": "",
+        "SpaceType": SPACE_TYPE_ID,
+        "MapID": MAP_ID,
+        "IconName": ICON_NAME,
+        "Location": "-1",
+        "Avalability": "-1",
+        "Handicap": "-1",
+        "Height": "-1",
+        "Depth": "-1",
+        "Online": "1",
+        "AreaID": AREA_ID,
+        "TowVehicleLengthID": "-1",
+        "GUID": GUID,
+        "e": str(time.time()),
+    }
+    query = urllib.parse.urlencode(params)
+    return f"{BASE_URL}/descanso-bay-regional-park/WebService.ashx?{query}"
 
 
 def check_availability():
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page    = browser.new_page()
+    """
+    Calls the WebService API and checks for available sites.
+    Returns a list of available site descriptions, or empty list if none.
+    """
+    url = build_api_url()
+    log.info("Calling availability API...")
+    log.debug("URL: %s", url)
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json, text/javascript, */*",
+        "Referer": f"{BASE_URL}/descanso-bay-regional-park/reservations/availability",
+    }
+
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            raw = response.read().decode("utf-8")
+    except Exception as e:
+        log.error("API request failed: %s", e)
+        return []
+
+    log.debug("Raw response (first 500 chars): %s", raw[:500])
+
+    # The API returns XML. Parse it.
+    # Available sites have IsSelect="1", unavailable have IsSelect="0"
+    available_sites = []
+
+    try:
+        # Try JSON first (some responses come back as JSON)
+        data = json.loads(raw)
+        log.info("Response is JSON: %s", str(data)[:200])
+        # If JSON, check for available sites in whatever structure comes back
+        text = json.dumps(data).lower()
+        if "available" in text and "isselect" in text:
+            available_sites.append("Site available (see booking page for details)")
+        return available_sites
+
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Try XML parsing
+    try:
+        root = ElementTree.fromstring(raw)
+
+        # Look for rowhead rows -- these are the actual campsites
+        # IsSelect="1" means available for your dates
+        # IsSelect="0" means not available
+        rowhead = root.find(".//rowhead")
+        if rowhead is None:
+            log.info("No rowhead element found in XML -- no sites returned")
+            return []
+
+        rows = rowhead.findall("row")
+        log.info("Found %d site rows in response", len(rows))
+
+        for row in rows:
+            is_select = row.get("IsSelect", "0")
+            site_desc = row.text or row.get("id", "Unknown site")
+            site_id   = row.get("id", "?")
+
+            if is_select == "1":
+                log.info("AVAILABLE site found: ID=%s Desc=%s", site_id, site_desc)
+                available_sites.append(f"Site {site_id}: {site_desc}")
+            else:
+                log.info("Not available: ID=%s", site_id)
+
+        return available_sites
+
+    except ElementTree.ParseError as e:
+        log.warning("XML parse failed: %s", e)
+        log.info("Raw response: %s", raw[:1000])
+
+        # Last resort: look for IsSelect="1" as plain text
+        if 'IsSelect="1"' in raw or "isselect=1" in raw.lower():
+            log.info("Found IsSelect=1 via text search -- availability detected")
+            return ["Site available (see booking page for details)"]
+
+        return []
+
+
+def send_alerts(available_sites):
+    """Send email to Gmail and SMS via Fido email-to-text."""
+    site_list = "\n".join(available_sites)
+    subject   = "Campsite Available! Descanso Bay Jul 31 - Aug 3"
+    body_text = (
+        f"Availability found at Descanso Bay!\n\n"
+        f"Dates: July 31 - Aug 3, 2026\n"
+        f"Type: Tent\n\n"
+        f"Sites:\n{site_list}\n\n"
+        f"Book now: {BOOKING_URL}"
+    )
+    body_html = (
+        f"<h2>Campsite Available at Descanso Bay!</h2>"
+        f"<p><strong>Dates:</strong> July 31 – Aug 3, 2026<br>"
+        f"<strong>Type:</strong> Tent</p>"
+        f"<pre>{site_list}</pre>"
+        f"<p><a href='{BOOKING_URL}' style='font-size:18px;font-weight:bold;'>"
+        f"👉 Book Now</a></p>"
+    )
+
+    recipients = [GMAIL_ADDRESS, f"{FIDO_NUMBER}@fido.ca"]
+
+    for recipient in recipients:
         try:
-            log.info("Loading reservation page...")
-            page.goto(URL, wait_until="networkidle", timeout=60_000)
-            time.sleep(3)
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = subject
+            msg["From"]    = GMAIL_ADDRESS
+            msg["To"]      = recipient
+            msg.attach(MIMEText(body_text, "plain"))
+            msg.attach(MIMEText(body_html, "html"))
 
-            log.info("Looking for date input fields...")
-            page.wait_for_selector("input", timeout=15_000)
-
-            inputs = page.locator("input[type='text'], input:not([type])").all()
-            log.info("Found %d text inputs", len(inputs))
-
-            filled = 0
-            for inp in inputs:
-                try:
-                    if not inp.is_visible():
-                        continue
-                    inp.click()
-                    time.sleep(0.3)
-                    inp.fill("")
-                    if filled == 0:
-                        inp.type(ARRIVAL_DATE, delay=50)
-                        log.info("Typed arrival date into input %d", filled)
-                        filled += 1
-                    elif filled == 1:
-                        inp.type(DEPARTURE_DATE, delay=50)
-                        log.info("Typed departure date into input %d", filled)
-                        filled += 1
-                    if filled == 2:
-                        break
-                except Exception:
-                    continue
-
-            time.sleep(0.5)
-
-            log.info("Looking for unit type dropdown...")
-            selects = page.locator("select").all()
-            for sel in selects:
-                try:
-                    options = sel.locator("option").all_text_contents()
-                    if "Tent" in options:
-                        sel.select_option(label="Tent")
-                        log.info("Selected Tent")
-                        break
-                except Exception:
-                    continue
-
-            time.sleep(0.5)
-
-            log.info("Clicking search button...")
-            for selector in [
-                "input[value*='START']",
-                "input[type='submit']",
-                "button[type='submit']",
-                "button:has-text('Search')",
-            ]:
-                try:
-                    btn = page.locator(selector).first
-                    if btn.is_visible():
-                        btn.click()
-                        log.info("Clicked: %s", selector)
-                        break
-                except Exception:
-                    continue
-
-            log.info("Waiting for results...")
-            page.wait_for_load_state("networkidle", timeout=30_000)
-            time.sleep(4)
-
-            content = page.content().lower()
-            body    = page.inner_text("body")
-
-            negative = ["no sites available", "no campsites", "0 sites", "not available", "sold out"]
-            for sig in negative:
-                if sig in content:
-                    log.info("No availability (matched: '%s')", sig)
-                    browser.close()
-                    return None
-
-            positive = ["available", "select site", "add to cart"]
-            found    = [s for s in positive if s in content]
-            if found:
-                lines   = [l.strip() for l in body.splitlines() if any(k in l.lower() for k in ["site", "available", "tent"]) and l.strip()]
-                summary = "\n".join(lines[:20]) or "(See booking page)"
-                log.info("Availability found!")
-                browser.close()
-                return summary
-
-            log.info("Could not determine availability -- treating as unavailable")
-            browser.close()
-            return None
-
-        except PlaywrightTimeout as e:
-            log.error("Timeout: %s", e)
-            browser.close()
-            return None
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+                server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+                server.sendmail(GMAIL_ADDRESS, recipient, msg.as_string())
+            log.info("Alert sent to %s", recipient)
         except Exception as e:
-            log.error("Error: %s", e)
-            browser.close()
-            return None
+            log.error("Failed to send to %s: %s", recipient, e)
 
 
 def main():
-    log.info("Campsite Checker running -- single check")
-    result = check_availability()
-    if result:
-        log.info("Availability found -- sending alerts")
-        send_alert(result)
+    log.info("Campsite Checker -- single run")
+    log.info("Dates: %s to %s | Tent | Descanso Bay", ARRIVAL_DATE, DEPARTURE_DATE)
+
+    available = check_availability()
+
+    if available:
+        log.info("*** AVAILABILITY FOUND: %s site(s) ***", len(available))
+        for s in available:
+            log.info("  -> %s", s)
+        send_alerts(available)
     else:
         log.info("No availability this check.")
 
