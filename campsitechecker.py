@@ -71,8 +71,7 @@ def build_map_url():
         "TowVehicleLengthID": "-1",
     })
     return (
-        f"{BASE_URL}/descanso-bay-regional-park/guid-{GUID}"
-        f"/reservations/online/map/Customer_Setup_Facility_Map.aspx?{params}"
+        f"{BASE_URL}/online/map/Customer_Setup_Facility_Map.aspx?{params}"
     )
 
 
