@@ -15,7 +15,8 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 # CONFIGURATION -- edit these values
 # ─────────────────────────────────────────────
 GMAIL_ADDRESS   = "marleytosh@gmail.com"   # sends AND receives the alert
-GMAIL_APP_PASSWORD = "stuv pnmn durl njge" # 16-char App Password (no spaces needed, but ok)
+import os
+   GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
 
 ARRIVAL_DATE    = "07/31/2026"
 DEPARTURE_DATE  = "08/03/2026"
