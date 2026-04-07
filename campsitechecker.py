@@ -23,8 +23,8 @@ GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
 PUSHOVER_USER_KEY  = "usbe385f9seyr4azpodowq8krvhnnm"
 PUSHOVER_API_TOKEN = "ab8p1aszzitboc79x73bu5z1tdgdqt"
 
-ARRIVAL_DATE   = "08/04/2026"
-DEPARTURE_DATE = "08/07/2026"
+ARRIVAL_DATE   = "07/31/2026"
+DEPARTURE_DATE = "08/03/2026"
 
 # Descanso Bay constants (from page source)
 CUSTOMER_ID = "56537"
